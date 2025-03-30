@@ -179,4 +179,4 @@ cython_debug/
 dataset/task3
 
 #Assignment pdf not pushed to repo
-A3.pdf
+*.pdf
