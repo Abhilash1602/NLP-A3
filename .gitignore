@@ -176,7 +176,7 @@ cython_debug/
 
 
 #datset for task 3 is not being pushed to the repo
-dataset/task3
+*.zip
 
 #Assignment pdf not pushed to repo
 *.pdf
