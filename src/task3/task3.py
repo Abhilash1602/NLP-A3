@@ -340,11 +340,13 @@ class MuSEModel(nn.Module):
     ) -> torch.Tensor:
         self.eval()
         vit_outputs = self.vit(pixel_values=pixel_values)
-        image_embeddings = vit_outputs.last_hidden_state
+        # Handle both object and dictionary return types
+        image_embeddings = vit_outputs.last_hidden_state if hasattr(vit_outputs, 'last_hidden_state') else vit_outputs['last_hidden_state']
         image_embeddings_proj = self.vit_proj(image_embeddings)
 
         encoder_outputs = self.bart.model.encoder(input_ids=input_ids, attention_mask=attention_mask)
-        text_embeddings = encoder_outputs.last_hidden_state
+        # Handle both object and dictionary return types
+        text_embeddings = encoder_outputs.last_hidden_state if hasattr(encoder_outputs, 'last_hidden_state') else encoder_outputs['last_hidden_state']
 
         fused_encoder_representation = self.fusion_module(
             text_embeddings=text_embeddings, image_embeddings=image_embeddings_proj,
@@ -355,18 +357,19 @@ class MuSEModel(nn.Module):
         from transformers.modeling_outputs import BaseModelOutput
         modified_encoder_outputs = BaseModelOutput(
             last_hidden_state=fused_encoder_representation,
-            hidden_states=encoder_outputs.hidden_states if hasattr(encoder_outputs, 'hidden_states') else None,
-            attentions=encoder_outputs.attentions if hasattr(encoder_outputs, 'attentions') else None
+            hidden_states=encoder_outputs.hidden_states if hasattr(encoder_outputs, 'hidden_states') else encoder_outputs.get('hidden_states'),
+            attentions=encoder_outputs.attentions if hasattr(encoder_outputs, 'attentions') else encoder_outputs.get('attentions')
         )
         
-        # Pass the encoder outputs correctly
+        # Pass the encoder outputs directly, not wrapped in another dictionary
         generated_ids = self.bart.generate(
             input_ids=None,  # Not needed when encoder_outputs is provided
             attention_mask=attention_mask,
-            encoder_outputs={"encoder_outputs": modified_encoder_outputs},
+            encoder_outputs=modified_encoder_outputs,
             **generation_kwargs
         )
         return generated_ids
+
 # --- Evaluation Metrics Computation (Identical to previous version) ---
 
 rouge_metric = load_metric("rouge")
