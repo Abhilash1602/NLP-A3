@@ -41,14 +41,17 @@ import math # For checking float comparison
 VIT_MODEL_ID = "google/vit-base-patch16-224-in21k"
 BART_MODEL_ID = "facebook/bart-base"
 
-# File Paths (Adjust these paths according to your setup)
-TRAIN_TSV_PATH = r"dataset\task3\train_df.tsv"
-VAL_TSV_PATH = r"dataset\task3\val_df.tsv"   
-TRAIN_DESC_PKL = r"dataset\task3\D_train.pkl"
-VAL_DESC_PKL = r"dataset\task3\D_val.pkl"     
-TRAIN_OBJ_PKL = r"dataset\task3\O_train.pkl"
-VAL_OBJ_PKL = r"dataset\task3\O_val.pkl"       
-IMAGE_DIR = r"dataset\task3\images" 
+# Get the directory of the current script
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# File Paths (Relative to the script's location)
+TRAIN_TSV_PATH = os.path.join(BASE_DIR, "../../dataset/task3/train_df.tsv")
+VAL_TSV_PATH = os.path.join(BASE_DIR, "../../dataset/task3/val_df.tsv")
+TRAIN_DESC_PKL = os.path.join(BASE_DIR, "../../dataset/task3/D_train.pkl")
+VAL_DESC_PKL = os.path.join(BASE_DIR, "../../dataset/task3/D_val.pkl")
+TRAIN_OBJ_PKL = os.path.join(BASE_DIR, "../../dataset/task3/O_train.pkl")
+VAL_OBJ_PKL = os.path.join(BASE_DIR, "../../dataset/task3/O_val.pkl")
+IMAGE_DIR = os.path.join(BASE_DIR, "../../dataset/task3/images")
 
 # Output Directories and Files
 OUTPUT_DIR = "./muse_results"
