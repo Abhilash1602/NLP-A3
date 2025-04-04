@@ -286,7 +286,6 @@ class MuSEModel(nn.Module):
         print("Initializing MuSEModel...")
         self.vit = AutoModel.from_pretrained(vit_model_id)
         self.bart = AutoModelForSeq2SeqLM.from_pretrained(bart_model_id)
-        # Add generation_config attribute from BART model
         self.generation_config = self.bart.generation_config
         self.bart_embed_dim = self.bart.config.hidden_size
         self.vit_embed_dim = self.vit.config.hidden_size
@@ -371,23 +370,6 @@ class MuSEModel(nn.Module):
             **generation_kwargs
         )
         return generated_ids
-
-    # Add these helper methods to support generation
-    def get_encoder(self):
-        """Returns the encoder part of the model."""
-        return self.bart.get_encoder()
-
-    def get_decoder(self):
-        """Returns the decoder part of the model."""
-        return self.bart.get_decoder()
-
-    def prepare_inputs_for_generation(self, *args, **kwargs):
-        """Prepare inputs for generation."""
-        return self.bart.prepare_inputs_for_generation(*args, **kwargs)
-
-    def _reorder_cache(self, past_key_values, beam_idx):
-        """Reorders the cache for beam search."""
-        return self.bart._reorder_cache(past_key_values, beam_idx)
 
 # --- Evaluation Metrics Computation (Identical to previous version) ---
 
