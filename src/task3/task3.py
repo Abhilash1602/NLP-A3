@@ -326,8 +326,14 @@ class MuSEModel(nn.Module):
             text_embeddings=text_embeddings, image_embeddings=image_embeddings_proj,
             text_attention_mask=attention_mask
         )
-
-        modified_encoder_outputs = (fused_encoder_representation,) + encoder_outputs[1:]
+        
+        # Create a proper encoder output object with the correct structure
+        from transformers.modeling_outputs import BaseModelOutput
+        modified_encoder_outputs = BaseModelOutput(
+            last_hidden_state=fused_encoder_representation,
+            hidden_states=encoder_outputs.hidden_states if hasattr(encoder_outputs, 'hidden_states') else None,
+            attentions=encoder_outputs.attentions if hasattr(encoder_outputs, 'attentions') else None
+        )
 
         outputs = self.bart(
             attention_mask=attention_mask, decoder_input_ids=None,
