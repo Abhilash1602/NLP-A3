@@ -1,0 +1,124 @@
+{
+  "best_global_step": 1119,
+  "best_metric": 45.89,
+  "best_model_checkpoint": "./muse_results/checkpoint-1119",
+  "epoch": 3.0,
+  "eval_steps": 500,
+  "global_step": 1119,
+  "is_hyper_param_search": false,
+  "is_local_process_zero": true,
+  "is_world_process_zero": true,
+  "log_history": [
+    {
+      "epoch": 1.0,
+      "grad_norm": 10.137856483459473,
+      "learning_rate": 3.351206434316354e-05,
+      "loss": 5.8356,
+      "step": 373
+    },
+    {
+      "epoch": 1.0,
+      "eval_bertscore_f1": 81.66,
+      "eval_bleu": 0.0,
+      "eval_bleu1": 21.72,
+      "eval_bleu2": 3.92,
+      "eval_bleu3": 0.28,
+      "eval_bleu4": 0.0,
+      "eval_gen_len": 14.405714285714286,
+      "eval_loss": 4.784677505493164,
+      "eval_meteor": 8.64,
+      "eval_rouge1": 17.65,
+      "eval_rouge2": 4.01,
+      "eval_rougeL": 16.88,
+      "eval_rougeLsum": 16.84,
+      "eval_runtime": 139.3958,
+      "eval_samples_per_second": 1.255,
+      "eval_steps_per_second": 0.079,
+      "step": 373
+    },
+    {
+      "epoch": 2.0,
+      "grad_norm": 12.997814178466797,
+      "learning_rate": 1.6890080428954423e-05,
+      "loss": 4.5487,
+      "step": 746
+    },
+    {
+      "epoch": 2.0,
+      "eval_bertscore_f1": 82.39,
+      "eval_bleu": 0.0,
+      "eval_bleu1": 26.47,
+      "eval_bleu2": 6.53,
+      "eval_bleu3": 0.35,
+      "eval_bleu4": 0.0,
+      "eval_gen_len": 17.571428571428573,
+      "eval_loss": 4.337588787078857,
+      "eval_meteor": 13.71,
+      "eval_rouge1": 26.28,
+      "eval_rouge2": 7.1,
+      "eval_rougeL": 24.23,
+      "eval_rougeLsum": 24.29,
+      "eval_runtime": 20.2564,
+      "eval_samples_per_second": 8.639,
+      "eval_steps_per_second": 0.543,
+      "step": 746
+    },
+    {
+      "epoch": 3.0,
+      "grad_norm": 21.427759170532227,
+      "learning_rate": 2.2341376228775692e-07,
+      "loss": 3.5528,
+      "step": 1119
+    },
+    {
+      "epoch": 3.0,
+      "eval_bertscore_f1": 90.25,
+      "eval_bleu": 24.17,
+      "eval_bleu1": 64.17,
+      "eval_bleu2": 42.73,
+      "eval_bleu3": 32.76,
+      "eval_bleu4": 25.6,
+      "eval_gen_len": 14.057142857142857,
+      "eval_loss": 2.666642665863037,
+      "eval_meteor": 42.06,
+      "eval_rouge1": 47.5,
+      "eval_rouge2": 31.66,
+      "eval_rougeL": 45.89,
+      "eval_rougeLsum": 45.94,
+      "eval_runtime": 74.0845,
+      "eval_samples_per_second": 2.362,
+      "eval_steps_per_second": 0.148,
+      "step": 1119
+    },
+    {
+      "epoch": 3.0,
+      "step": 1119,
+      "total_flos": 0.0,
+      "train_loss": 4.645676900064231,
+      "train_runtime": 1134.583,
+      "train_samples_per_second": 7.887,
+      "train_steps_per_second": 0.986
+    }
+  ],
+  "logging_steps": 500,
+  "max_steps": 1119,
+  "num_input_tokens_seen": 0,
+  "num_train_epochs": 3,
+  "save_steps": 500,
+  "stateful_callbacks": {
+    "TrainerControl": {
+      "args": {
+        "should_epoch_stop": false,
+        "should_evaluate": false,
+        "should_log": false,
+        "should_save": true,
+        "should_training_stop": true
+      },
+      "attributes": {}
+    }
+  },
+  "total_flos": 0.0,
+  "train_batch_size": 8,
+  "trial_name": null,
+  "trial_params": null
+}
