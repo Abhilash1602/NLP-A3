@@ -311,8 +311,19 @@ class MuSEModel(nn.Module):
         pixel_values: torch.Tensor, labels: Optional[torch.Tensor] = None,
         decoder_attention_mask: Optional[torch.Tensor] = None, **kwargs
     ) -> Dict:
-        # Freeze ViT? Consider adding self.vit.eval() or using no_grad based on fine-tuning strategy
-        # with torch.no_grad(): # Example: uncomment if ViT should not be trained
+        # Ensure all input tensors have proper dimensions for DataParallel
+        if input_ids.dim() == 1:
+            input_ids = input_ids.unsqueeze(0)
+        if attention_mask.dim() == 1:
+            attention_mask = attention_mask.unsqueeze(0)
+        if pixel_values.dim() == 3:  # If it's [C, H, W] without batch dimension
+            pixel_values = pixel_values.unsqueeze(0)
+        if labels is not None and labels.dim() == 1:
+            labels = labels.unsqueeze(0)
+        if decoder_attention_mask is not None and decoder_attention_mask.dim() == 1:
+            decoder_attention_mask = decoder_attention_mask.unsqueeze(0)
+        
+        # Proceed with the original forward method
         vit_outputs = self.vit(pixel_values=pixel_values)
         image_embeddings = vit_outputs.last_hidden_state
         image_embeddings_proj = self.vit_proj(image_embeddings)
@@ -349,6 +360,16 @@ class MuSEModel(nn.Module):
         pixel_values: torch.Tensor, **generation_kwargs
     ) -> torch.Tensor:
         self.eval()
+        
+        
+        # Ensure all input tensors have proper dimensions
+        if input_ids.dim() == 1:
+            input_ids = input_ids.unsqueeze(0)
+        if attention_mask.dim() == 1:
+            attention_mask = attention_mask.unsqueeze(0)
+        if pixel_values.dim() == 3:  # If it's [C, H, W] without batch dimension
+            pixel_values = pixel_values.unsqueeze(0)
+            
         vit_outputs = self.vit(pixel_values=pixel_values)
         # Handle both object and dictionary return types
         image_embeddings = vit_outputs.last_hidden_state if hasattr(vit_outputs, 'last_hidden_state') else vit_outputs['last_hidden_state']
