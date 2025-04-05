@@ -648,6 +648,7 @@ if __name__ == "__main__":
         fp16=torch.cuda.is_available(),
         # report_to="none", # Disable default reporting like wandb if not used
         push_to_hub=False,
+        ave_safetensors=False, # Avoids issues with saving/loading model weights
     )
 
     print("Initializing Trainer...")
