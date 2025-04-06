@@ -126,16 +126,16 @@ def split_heads_qkv(Q, K, V, num_heads, depth):
     return Q, K, V
 
 def load_and_preprocess_data():
-    # Try to use absolute paths for files first
+    # Try to use paths with os.path for platform independence
     try:
-        with open("NLP-A3/dataset/task1/shakespear_train.txt", "r") as f:
+        with open(os.path.join("dataset", "task1", "shakespear_train.txt"), "r") as f:
             lines_train = f.readlines()
         print("Loaded train data locally")
     except FileNotFoundError:
         raise FileNotFoundError("Could not find the train data file")
     
     try:
-        with open("NLP-A3/dataset/task1/shakespear_dev.txt", "r") as f:
+        with open(os.path.join("dataset", "task1", "shakespear_dev.txt"), "r") as f:
             lines_dev = f.readlines()
         print("Loaded dev data locally")
     except FileNotFoundError:
@@ -143,7 +143,7 @@ def load_and_preprocess_data():
     
     # For test data, try to load it or generate from train data
     try:
-        with open("NLP-A3/dataset/task1/shakespear_test.txt", "r") as f:
+        with open(os.path.join("dataset", "task1", "shakespear_test.txt"), "r") as f:
             lines_test = f.readlines()
         print("Loaded test data locally")
     except FileNotFoundError:
@@ -155,7 +155,8 @@ def load_and_preprocess_data():
         lines_test = [lines_train[i] for i in test_indices]
         
         # Save the generated test data
-        with open("NLP-A3/dataset/task1/shakespear_test.txt", "w") as f:
+        os.makedirs(os.path.join("dataset", "task1"), exist_ok=True)  # Ensure directory exists
+        with open(os.path.join("dataset", "task1", "shakespear_test.txt"), "w") as f:
             f.writelines(lines_test)
         print(f"Generated and saved {len(lines_test)} test examples")
 
@@ -449,7 +450,7 @@ class MultiHeadAttention(nn.Module):
 ## Training function
 def train_model(model, train_loader, val_dataset, tokenizer, tokenizer_inv, 
                 optimizer, criterion, scheduler=None, epochs=20, val_data=None, 
-                save_path="NLP-A3/src/task1/transformer_model.pt", patience=3, max_grad_norm=1.0):
+                save_path="src/task1/transformer_model.pt", patience=3, max_grad_norm=1.0):
     train_losses = []
     val_losses = []
     
@@ -511,7 +512,7 @@ def train_model(model, train_loader, val_dataset, tokenizer, tokenizer_inv,
             tokenizer, 
             tokenizer_inv, 
             context="<START>", 
-            gen_tokens=20
+            gen_tokens=50
         )
         
         print(f"Sample text: {sample_text}")
@@ -566,7 +567,7 @@ def main():
     d_ff = 1024
     dropout = 0.1
     
-    save_path = "NLP-A3/src/task1/transformer_shakespeare.pt"
+    save_path = os.path.join("src", "task1", "transformer_shakespeare.pt")
     
     # Check if model file already exists
     if os.path.exists(save_path):
@@ -665,7 +666,7 @@ def main():
         plt.xlabel('Epochs')
         plt.ylabel('Loss')
         plt.legend()
-        plt.savefig('NLP-A3/src/task1/loss_plot.png')
+        plt.savefig(os.path.join('src', 'task1', 'loss_plot.png'))
         plt.show()
 
         ## Save the model
@@ -684,7 +685,7 @@ def main():
         }, save_path)
 
     ## Evaluate on test data
-    with open("NLP-A3/dataset/task1/shakespear_test.txt", "r") as f:
+    with open("dataset/task1/shakespear_test.txt", "r") as f:
         lines_test = f.readlines()
     
     test_data = [" ".join(line.split()) for line in lines_test]
@@ -755,8 +756,8 @@ if __name__ == "__main__":
     
     # Model is now already loaded in main() if it exists
     # Just run inference with the existing model
-    model_path = "NLP-A3/src/task1/transformer_shakespeare.pt"
-    test_file = "NLP-A3/dataset/task1/shakespear_test.txt" 
+    model_path = os.path.join("src", "task1", "transformer_shakespeare.pt")
+    test_file = os.path.join("dataset", "task1", "shakespear_test.txt")
     
     # Load the checkpoint to get tokenizer and tokenizer_inv if not already available
     checkpoint = torch.load(model_path)
