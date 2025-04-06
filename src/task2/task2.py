@@ -2,7 +2,7 @@ import pandas as pd
 import os
 import logging
 from evaluate import load as load_metric
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1,2"
 import torch
 from datasets import Dataset, DatasetDict
 from transformers import (
@@ -51,7 +51,7 @@ PER_DEVICE_EVAL_BATCH_SIZE = 16  # Can usually be higher than train batch size
 # Increase accumulation steps to simulate larger batch size if lowering batch size
 GRADIENT_ACCUMULATION_STEPS = 4 # Effective batch size = batch_size * accumulation_steps
 LEARNING_RATE = 5e-5
-NUM_TRAIN_EPOCHS = 1 # Start with a small number, increase if needed/possible
+NUM_TRAIN_EPOCHS = 3 # Start with a small number, increase if needed/possible
 WEIGHT_DECAY = 0.01
 FP16 = torch.cuda.is_available() # Use mixed precision if CUDA is available
 
@@ -108,12 +108,12 @@ except nltk.downloader.DownloadError:
 print("Loading preprocessed data...")
 train_df = pd.read_csv(os.path.join(DATA_DIR, 'train_data.csv'))
 val_df = pd.read_csv(os.path.join(DATA_DIR, 'val_data.csv'))
-# test_df = pd.read_csv(os.path.join(DATA_DIR, 'test_data.csv')) # Load if needed for final eval
+test_df = pd.read_csv(os.path.join(DATA_DIR, 'test_data.csv')) # Load if needed for final eval
 
 # Convert pandas DataFrames to Hugging Face Datasets
 train_dataset = Dataset.from_pandas(train_df)
 val_dataset = Dataset.from_pandas(val_df)
-# test_dataset = Dataset.from_pandas(test_df)
+test_dataset = Dataset.from_pandas(test_df)
 
 # Optional: Create a DatasetDict if you want to group them
 # dataset_dict = DatasetDict({
@@ -130,7 +130,7 @@ rouge = load_metric("rouge")
 bleu = load_metric("bleu")
 bertscore = load_metric("bertscore")
 
-def compute_metrics(eval_pred):
+def compute_metrics(eval_pred, tokenizer):
     """Computes ROUGE, BLEU-4, and BERTScore."""
     predictions, labels = eval_pred
 
@@ -142,12 +142,20 @@ def compute_metrics(eval_pred):
     decoded_preds = tokenizer.batch_decode(predictions, skip_special_tokens=True)
     decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
+    print(f"Decoded Predictions: {decoded_preds[:5]}")
+    print(f"Decoded Labels: {decoded_labels[:5]}")
+
     # Filter out empty predictions and references
     filtered_preds, filtered_labels = [], []
     for pred, label in zip(decoded_preds, decoded_labels):
-        if label.strip():  # Only include non-empty references
+        if pred.strip() and label.strip():  # Only include non-empty predictions and references
             filtered_preds.append(pred)
             filtered_labels.append(label)
+
+    # If no valid predictions or references, return 0 for all metrics
+    if not filtered_preds or not filtered_labels:
+        print("Warning: No valid predictions or references for metric computation.")
+        return {"rouge1": 0, "rouge2": 0, "rougeL": 0, "bleu4": 0, "bertscore_f1": 0}
 
     # Ensure references are in the correct format for BLEU and ROUGE
     decoded_labels_bleu = [[label] for label in filtered_labels]  # BLEU expects a list of lists
@@ -159,7 +167,6 @@ def compute_metrics(eval_pred):
         "rouge1": rouge_scores["rouge1"] * 100,
         "rouge2": rouge_scores["rouge2"] * 100,
         "rougeL": rouge_scores["rougeL"] * 100,
-        "rougeLsum": rouge_scores["rougeLsum"] * 100,
     }
 
     # BLEU-4
@@ -177,7 +184,7 @@ def compute_metrics(eval_pred):
 # Global tokenizer variable to be set within the training loop
 tokenizer = None
 
-def preprocess_function(examples):
+def preprocess_function(examples, tokenizer):
     """Tokenizes the input and target texts."""
     prefix = "normalize claim: "  # Task-specific prefix for T5 models
     inputs = [prefix + str(doc) if doc is not None else "" for doc in examples['Social Media Post']]
@@ -210,8 +217,8 @@ def train_model(model_name, train_data, val_data, output_dir_suffix):
 
     # 2. Tokenize Data
     print("Tokenizing datasets...")
-    tokenized_train = train_data.map(preprocess_function, batched=True)
-    tokenized_val = val_data.map(preprocess_function, batched=True)
+    tokenized_train = train_data.map(lambda examples: preprocess_function(examples, tokenizer), batched=True)
+    tokenized_val = val_data.map(lambda examples: preprocess_function(examples, tokenizer), batched=True)
 
     # Remove original text columns to free up memory and avoid Trainer issues
     tokenized_train = tokenized_train.remove_columns(train_data.column_names)
@@ -257,35 +264,37 @@ def train_model(model_name, train_data, val_data, output_dir_suffix):
         eval_dataset=tokenized_val,
         tokenizer=tokenizer,
         data_collator=data_collator,
-        compute_metrics=compute_metrics,
+        compute_metrics=lambda eval_pred: compute_metrics(eval_pred, tokenizer),
     )
 
-    # 6. CSV File for Metrics
-    metrics_file = os.path.join(output_dir, "training_metrics.csv")
-    with open(metrics_file, mode="w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(["epoch", "rouge1", "rouge2", "rougeL", "bleu4", "bertscore_f1"])  # Header row
+    # 6. Text File for Metrics
+    metrics_file = os.path.join(output_dir, "training_metrics.txt")
+    with open(metrics_file, mode="w") as file:
+        file.write("Epoch-wise Metrics:\n")
 
     # 7. Start Training
     print("Starting training...")
-    for epoch in range(1, int(NUM_TRAIN_EPOCHS) + 1):
-        train_result = trainer.train(resume_from_checkpoint=None if epoch == 1 else output_dir)
-        metrics = train_result.metrics
 
-        # Log metrics to shell
-        print(f"Epoch {epoch} Metrics: {metrics}")
+    # Train the model
+    train_result = trainer.train()
+    train_metrics = train_result.metrics
 
-        # Save metrics to CSV
-        with open(metrics_file, mode="a", newline="") as file:
-            writer = csv.writer(file)
-            writer.writerow([
-                epoch,
-                metrics.get("eval_rouge1", 0),
-                metrics.get("eval_rouge2", 0),
-                metrics.get("eval_rougeL", 0),
-                metrics.get("eval_bleu4", 0),
-                metrics.get("eval_bertscore_f1", 0),
-            ])
+    # Log training metrics to the shell
+    print(f"Training Metrics: {train_metrics}")
+
+    # Evaluate the model after training
+    eval_metrics = trainer.evaluate()
+    print(f"Evaluation Metrics: {eval_metrics}")
+
+    # Save evaluation metrics to the text file
+    with open(metrics_file, mode="a") as file:
+        file.write("Final Metrics:\n")
+        file.write(f"  ROUGE-1: {eval_metrics.get('eval_rouge1', 0):.2f}\n")
+        file.write(f"  ROUGE-2: {eval_metrics.get('eval_rouge2', 0):.2f}\n")
+        file.write(f"  ROUGE-L: {eval_metrics.get('eval_rougeL', 0):.2f}\n")
+        file.write(f"  BLEU-4: {eval_metrics.get('eval_bleu4', 0):.2f}\n")
+        file.write(f"  BERTScore F1: {eval_metrics.get('eval_bertscore_f1', 0):.2f}\n")
+        file.write("\n")
 
     print("Training finished.")
 
@@ -321,32 +330,102 @@ def generate_response(model, tokenizer, input_text, max_length=120, temperature=
     return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
 
+# --- Evaluation Function ---
+def evaluate_model_on_test(model_name, test_data, output_dir_suffix):
+    """
+    Evaluates the stored model on the test dataset.
+    """
+    print(f"\n--- Evaluating {model_name} on Test Dataset ---")
+    model_dir = os.path.join(MODEL_OUTPUT_DIR, f"{model_name.replace('/', '_')}_{output_dir_suffix}")
+    
+    # Load the model and tokenizer
+    print(f"Loading model and tokenizer from {model_dir}...")
+    model = AutoModelForSeq2SeqLM.from_pretrained(model_dir)
+    tokenizer = AutoTokenizer.from_pretrained(model_dir)
+    
+    # Tokenize the test dataset
+    print("Tokenizing test dataset...")
+    tokenized_test = test_data.map(
+        lambda examples: preprocess_function(examples, tokenizer),  # Pass tokenizer explicitly
+        batched=True,
+        remove_columns=test_data.column_names
+    )
+    
+    # Initialize the trainer for evaluation
+    trainer = Seq2SeqTrainer(
+        model=model,
+        tokenizer=tokenizer,
+        compute_metrics=lambda eval_pred: compute_metrics(eval_pred, tokenizer),  # Pass tokenizer explicitly
+        args=Seq2SeqTrainingArguments(
+            output_dir=model_dir,
+            predict_with_generate=True,  # Enable generation during evaluation
+            generation_max_length=MAX_TARGET_LENGTH,  # Set max length for generated responses
+            generation_num_beams=4  # Use beam search for better results
+        )
+    )
+    
+    # Evaluate the model on the test dataset
+    print("Evaluating...")
+    test_metrics = trainer.evaluate(eval_dataset=tokenized_test)
+    print(f"Test Metrics: {test_metrics}")
+    
+    # Save test metrics to a file
+    test_metrics_file = os.path.join(model_dir, "test_metrics.txt")
+    with open(test_metrics_file, mode="w") as file:
+        file.write("Test Metrics:\n")
+        file.write(f"  ROUGE-1: {test_metrics.get('eval_rouge1', 0):.2f}\n")
+        file.write(f"  ROUGE-2: {test_metrics.get('eval_rouge2', 0):.2f}\n")
+        file.write(f"  ROUGE-L: {test_metrics.get('eval_rougeL', 0):.2f}\n")
+        file.write(f"  BLEU-4: {test_metrics.get('eval_bleu4', 0):.2f}\n")
+        file.write(f"  BERTScore F1: {test_metrics.get('eval_bertscore_f1', 0):.2f}\n")
+        file.write("\n")
+    
+    print(f"Test metrics saved to {test_metrics_file}")
+    return test_metrics
+
+
 # --- Run Training ---
 if __name__ == "__main__":
-    print("Starting training...")
-    # Train BART model
-    bart_trainer = train_model(
-        model_name=BART_MODEL_NAME,
-        train_data=train_dataset,
-        val_data=val_dataset,
-        output_dir_suffix="finetuned_claim_normalization"
-    )
-    print("Finished training BART model.")
+    # print("Starting training...")
+    # # Train BART model
+    # bart_trainer = train_model(
+    #     model_name=BART_MODEL_NAME,
+    #     train_data=train_dataset,
+    #     val_data=val_dataset,
+    #     output_dir_suffix="finetuned_claim_normalization"
+    # )
+    # print("Finished training BART model.")
 
-    # Clear CUDA cache before training the next model (important in limited memory environments)
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        print("CUDA cache cleared.")
+    # # Clear CUDA cache before training the next model (important in limited memory environments)
+    # if torch.cuda.is_available():
+    #     torch.cuda.empty_cache()
+    #     print("CUDA cache cleared.")
 
     # Train T5 model
-    t5_trainer = train_model(
-        model_name=T5_MODEL_NAME,
-        train_data=train_dataset,
-        val_data=val_dataset,
+    # t5_trainer = train_model(
+    #     model_name=T5_MODEL_NAME,
+    #     train_data=train_dataset,
+    #     val_data=val_dataset,
+    #     output_dir_suffix="finetuned_claim_normalization"
+    # )
+    # print("Finished training T5 model.")
+
+    # print("\n--- All models trained successfully! ---")
+    # print(f"BART model saved in: {os.path.join(MODEL_OUTPUT_DIR, f'{BART_MODEL_NAME}_finetuned_claim_normalization')}")
+    # print(f"T5 model saved in: {os.path.join(MODEL_OUTPUT_DIR, f'{T5_MODEL_NAME}_finetuned_claim_normalization')}")
+
+    # Evaluate BART model on test dataset
+    bart_test_metrics = evaluate_model_on_test(
+        model_name=BART_MODEL_NAME,
+        test_data=test_dataset,
         output_dir_suffix="finetuned_claim_normalization"
     )
-    print("Finished training T5 model.")
+    print("Finished evaluating BART model on test dataset.")
 
-    print("\n--- All models trained successfully! ---")
-    print(f"BART model saved in: {os.path.join(MODEL_OUTPUT_DIR, f'{BART_MODEL_NAME}_finetuned_claim_normalization')}")
-    print(f"T5 model saved in: {os.path.join(MODEL_OUTPUT_DIR, f'{T5_MODEL_NAME}_finetuned_claim_normalization')}")
+    # Evaluate T5 model on test dataset
+    # t5_test_metrics = evaluate_model_on_test(
+    #     model_name=T5_MODEL_NAME,
+    #     test_data=test_dataset,
+    #     output_dir_suffix="finetuned_claim_normalization"
+    # )
+    # print("Finished evaluating T5 model on test dataset.")
