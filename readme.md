@@ -8,6 +8,3 @@ Task 2 dataset not pushed as Git is configured to convert line endings to CRLF (
 Task 1 by harsh
 Task 2 by dhruv
 Task 3 by Abhilash
-
-
-----------------------------------------------------------duck----------------------------------------------------------
