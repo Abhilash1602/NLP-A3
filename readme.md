@@ -1,3 +1,147 @@
+# Task 1: Shakespeare Language Model with Transformer
+
+## Overview
+This project implements a character-level transformer model from scratch to generate text in the style of Shakespeare. The model is trained on a dataset of Shakespeare's works and learns to predict the next character in a sequence.
+
+## Preprocessing Steps
+
+### Data Loading and Processing
+1. **Data Sources**: The implementation reads data from three files:
+   - `shakespear_train.txt`: Main training corpus
+   - `shakespear_dev.txt`: Validation dataset
+   - `shakespear_test.txt`: Test dataset (created if not found)
+
+2. **Character-level Tokenization**:
+   - All characters from the training text are identified and sorted
+   - Each unique character is assigned a numeric token ID
+   - Special tokens are added:
+     - `<PAD>` (ID: 0): For padding shorter sequences to fixed length
+     - `<START>` (ID: 1): To mark the beginning of sequences
+     - `<STOP>` (ID: 2): To mark the end of sequences
+     - `<UNK>` (ID: len(tokenizer)): For handling unseen characters
+
+3. **Sequence Creation**:
+   - Each text line is converted to a sequence of token IDs
+   - Start and stop tokens are added to the beginning and end
+   - Sequences are padded to a maximum length of 128 tokens
+
+4. **Data Preparation for Training**:
+   - Input sequence (x): All tokens except the last one
+   - Target sequence (y): All tokens except the first one
+   - This setup enables the model to learn to predict the next token
+
+## Model Architecture
+
+### Transformer Language Model
+The model follows a decoder-only transformer architecture similar to GPT, implemented from scratch with the following components:
+
+1. **Embedding Layer**:
+   - Token embedding: Maps token IDs to dense vectors
+   - Positional encoding: Fixed sinusoidal encoding to provide position information
+
+2. **Transformer Blocks** (4 layers):
+   - Each block contains:
+     - **Multi-Head Self-Attention**:
+       - 8 attention heads that allow the model to focus on different parts of the input
+       - Linear projections for queries, keys, and values
+       - Scaled dot-product attention with causal masking
+     - **Feed-Forward Network**:
+       - Two linear layers with GELU activation
+       - Expands to 1024 dimensions internally
+
+3. **Normalization and Residual Connections**:
+   - Pre-normalization architecture (LayerNorm before attention/FFN)
+   - Residual connections to help with gradient flow
+
+4. **Output Layer**:
+   - Linear projection to vocabulary size
+   - Softmax to produce probabilities over all possible next characters
+
+### Key Implementation Features
+
+1. **Causal Masking**:
+   - Prevents the model from seeing future tokens during training
+   - Implemented as a lower triangular matrix multiplied with attention scores
+
+2. **Pre-norm Architecture**:
+   - LayerNorm applied before attention and feed-forward layers
+   - Helps with training stability, especially for deeper networks
+
+3. **GELU Activation**:
+   - Smoother alternative to ReLU used in modern transformers
+   - Provides better gradient properties
+
+4. **Weight Initialization**:
+   - Xavier uniform initialization for better convergence at start of training
+
+## Hyperparameters
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Vocabulary Size | ~100 | Number of unique characters + special tokens |
+| d_model | 256 | Dimension of embeddings and hidden layers |
+| nhead | 8 | Number of attention heads |
+| num_layers | 4 | Number of transformer blocks |
+| d_ff | 1024 | Feed-forward network hidden dimension |
+| dropout | 0.1 | Dropout rate for regularization |
+| batch_size | 32 | Number of sequences per batch |
+| learning_rate | 5e-4 | Initial learning rate for AdamW optimizer |
+| weight_decay | 0.01 | L2 regularization term |
+| max_seq_length | 128 | Maximum sequence length for training |
+| max_grad_norm | 1.0 | Gradient clipping threshold |
+
+## Training Process
+
+### Training Configuration
+- **Optimizer**: AdamW with weight decay
+- **Loss Function**: Cross-entropy loss (ignoring padding tokens)
+- **Learning Rate Scheduling**: ReduceLROnPlateau (halves LR after plateau)
+- **Early Stopping**: Training stops after 3 epochs without improvement
+- **Gradient Clipping**: Applied with max norm of 1.0
+
+### Training Improvements
+1. **Learning Rate Scheduling**: Reduces learning rate when validation loss plateaus
+2. **Early Stopping**: Prevents overfitting by stopping training when validation loss stagnates
+3. **Gradient Clipping**: Prevents exploding gradients for more stable training
+4. **Pre-norm Architecture**: Enables better gradient flow through the network
+5. **Special Token Handling**: Excludes special tokens when calculating evaluation loss
+
+## Results
+
+### Training and Validation Loss
+![Training and Validation Loss](/NLP-A3/src/task1/loss_plot.png)
+
+The loss curves show:
+- Consistent decrease in both training and validation loss
+- Good convergence behavior without significant overfitting
+- Final validation loss of approximately 1.58
+
+### Test Performance
+- **Perplexity**: 3.17 on the test set
+- Character-level perplexity in this range indicates the model has learned the patterns of Shakespeare's language well
+
+### Sample Generations
+```
+Context: 'MENENIUS : The'
+Generated: 'MENENIUS : The most of mine.'
+
+Context: 'I do beseech'
+Generated: 'I do beseech youur name, Bestory to the law; 'T is should th'
+
+Context: 'BUCKINGHAM : Stay'
+Generated: 'BUCKINGHAM : Stay, I have a nothing: not slave the greatity I'
+```
+
+These samples demonstrate the model's ability to:
+1. Generate character names consistent with Shakespeare's plays
+2. Produce grammatically reasonable continuations
+3. Mimic the style and vocabulary of Shakespearean language
+
+## Conclusion
+
+The implemented transformer model successfully learns to generate text in Shakespeare's style at character level. The architecture incorporates modern techniques like pre-norm layers, GELU activations, and learning rate scheduling. The generated text captures many characteristics of Shakespeare's writing, including character dialogues and period-appropriate language.
+
+
 # Task 3: Multimodal Sarcasm Explanation (MuSE) Model
 
 ## Introduction
