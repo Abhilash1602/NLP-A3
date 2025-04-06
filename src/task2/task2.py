@@ -1,6 +1,8 @@
 import pandas as pd
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+import logging
+from evaluate import load as load_metric
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import torch
 from datasets import Dataset, DatasetDict
 from transformers import (
@@ -10,7 +12,6 @@ from transformers import (
     Seq2SeqTrainer,
     DataCollatorForSeq2Seq
 )
-import evaluate # Hugging Face Evaluate library
 import nltk
 import numpy as np
 
@@ -19,11 +20,19 @@ import numpy as np
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
 # Correctly resolve the data directory
 DATA_DIR = os.path.join(BASE_DIR, "dataset/task2")
-
-# DATA_DIR = os.path.join(BASE_DIR, '../../dataset/task2/') # Directory containing train/val CSVs
-
 MODEL_OUTPUT_DIR = os.path.join(BASE_DIR, 'models') # Directory to save trained models
 RANDOM_SEED = 42
+
+# Ensure the model output directory exists
+os.makedirs(MODEL_OUTPUT_DIR, exist_ok=True)
+
+# Configure logging
+logging.basicConfig(
+    filename=os.path.join(MODEL_OUTPUT_DIR, "training.log"),
+    level=logging.INFO,
+    format="%(asctime)s - %(message)s"
+)
+logger = logging.getLogger()
 
 # Choose model variants - smaller ones suitable for Colab/Kaggle free tier
 # Other options: 'facebook/bart-large', 't5-base', 't5-large' (if resources allow)
@@ -41,7 +50,7 @@ PER_DEVICE_EVAL_BATCH_SIZE = 8  # Can usually be higher than train batch size
 # Increase accumulation steps to simulate larger batch size if lowering batch size
 GRADIENT_ACCUMULATION_STEPS = 4 # Effective batch size = batch_size * accumulation_steps
 LEARNING_RATE = 5e-5
-NUM_TRAIN_EPOCHS = 3 # Start with a small number, increase if needed/possible
+NUM_TRAIN_EPOCHS = 50 # Start with a small number, increase if needed/possible
 WEIGHT_DECAY = 0.01
 FP16 = torch.cuda.is_available() # Use mixed precision if CUDA is available
 
@@ -74,31 +83,41 @@ print(f"Train dataset size: {len(train_dataset)}")
 print(f"Validation dataset size: {len(val_dataset)}")
 
 # --- Metric ---
-rouge = evaluate.load("rouge")
+rouge = load_metric("rouge")
+bleu = load_metric("bleu")
+bertscore = load_metric("bertscore")
 
 def compute_metrics(eval_pred):
-    """Computes ROUGE scores for sequence-to-sequence models."""
+    """Computes ROUGE, BLEU-4, and BERTScore."""
     predictions, labels = eval_pred
-    # Decode generated summaries, replacing -100 in the labels as it's used for padding.
-    decoded_preds = tokenizer.batch_decode(predictions, skip_special_tokens=True)
+
+    # Ensure token IDs are valid
+    predictions = np.where((predictions >= 0) & (predictions < tokenizer.vocab_size), predictions, tokenizer.pad_token_id)
     labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
+
+    # Decode predictions and labels
+    decoded_preds = tokenizer.batch_decode(predictions, skip_special_tokens=True)
     decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
-    # ROUGE expects newline after each sentence
-    decoded_preds = ["\n".join(nltk.sent_tokenize(pred.strip())) for pred in decoded_preds]
-    decoded_labels = ["\n".join(nltk.sent_tokenize(label.strip())) for label in decoded_labels]
+    # ROUGE
+    rouge_scores = rouge.compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=True)
+    rouge_results = {key: value.mid.fmeasure * 100 for key, value in rouge_scores.items()}
 
-    # Compute ROUGE scores
-    result = rouge.compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=True)
-    
-    # Extract specific ROUGE scores
-    result = {key: value * 100 for key, value in result.items()} # Convert to percentage
+    # BLEU-4
+    decoded_labels_bleu = [[label] for label in decoded_labels]
+    bleu_score = bleu.compute(predictions=decoded_preds, references=decoded_labels_bleu)
+    bleu_results = {"bleu4": bleu_score["bleu"] * 100}
 
-    # Add mean generated length
-    prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in predictions]
-    result["gen_len"] = np.mean(prediction_lens)
+    # BERTScore
+    bertscore_results = bertscore.compute(predictions=decoded_preds, references=decoded_labels, lang="en")
+    bertscore_f1 = {"bertscore_f1": np.mean(bertscore_results["f1"]) * 100}
 
-    return {k: round(v, 4) for k, v in result.items()}
+    # Combine all metrics
+    return {**rouge_results, **bleu_results, **bertscore_f1}
+
+# Redirect stdout to log file
+import sys
+sys.stdout = open(os.path.join(MODEL_OUTPUT_DIR, "training_output.log"), "w")
 
 # --- Tokenization Function ---
 # Global tokenizer variable to be set within the training loop
@@ -122,21 +141,21 @@ def preprocess_function(examples):
 
 # --- Training Function ---
 def train_model(model_name, train_data, val_data, output_dir_suffix):
-    global tokenizer # Allow modification of the global tokenizer variable
+    global tokenizer  # Allow modification of the global tokenizer variable
 
-    print(f"\n--- Training {model_name} ---")
+    logger.info(f"\n--- Training {model_name} ---")
     output_dir = os.path.join(MODEL_OUTPUT_DIR, f"{model_name.replace('/', '_')}_{output_dir_suffix}")
     logging_dir = os.path.join(output_dir, 'logs')
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(logging_dir, exist_ok=True)
 
     # 1. Load Tokenizer and Model
-    print(f"Loading tokenizer and model for {model_name}...")
+    logger.info(f"Loading tokenizer and model for {model_name}...")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
 
     # 2. Tokenize Data
-    print("Tokenizing datasets...")
+    logger.info("Tokenizing datasets...")
     tokenized_train = train_data.map(preprocess_function, batched=True)
     tokenized_val = val_data.map(preprocess_function, batched=True)
 
@@ -144,17 +163,15 @@ def train_model(model_name, train_data, val_data, output_dir_suffix):
     tokenized_train = tokenized_train.remove_columns(train_data.column_names)
     tokenized_val = tokenized_val.remove_columns(val_data.column_names)
 
-
     # 3. Data Collator
-    # Dynamically pads sequences to the longest sequence in a batch
     data_collator = DataCollatorForSeq2Seq(
         tokenizer=tokenizer,
         model=model,
-        padding="longest" # Pad to longest in batch, more efficient than padding to max_length
+        padding="longest"  # Pad to longest in batch, more efficient than padding to max_length
     )
 
     # 4. Training Arguments
-    print("Setting up training arguments...")
+    logger.info("Setting up training arguments...")
     training_args = Seq2SeqTrainingArguments(
         output_dir=output_dir,
         evaluation_strategy="epoch",       # Evaluate at the end of each epoch
@@ -164,17 +181,16 @@ def train_model(model_name, train_data, val_data, output_dir_suffix):
         per_device_eval_batch_size=PER_DEVICE_EVAL_BATCH_SIZE,
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
         weight_decay=WEIGHT_DECAY,
-        num_train_epochs=NUM_TRAIN_EPOCHS,
+        num_train_epochs=NUM_TRAIN_EPOCHS,  # Train for 50 epochs
         predict_with_generate=True,        # Important for Seq2Seq evaluation
+        generation_max_length=120,         # Set max length of generated response to 120
         fp16=FP16,                         # Use mixed precision if available
         logging_dir=logging_dir,           # Directory for TensorBoard logs
         logging_steps=100,                 # Log training loss every 100 steps
         load_best_model_at_end=True,       # Load the best model based on metric at the end
         metric_for_best_model="rougeL",    # Use ROUGE-L score to find the best model
         greater_is_better=True,            # Higher ROUGE is better
-        report_to="tensorboard",           # Log to TensorBoard (can add "wandb" if using Weights & Biases)
-        # Optional: Add gradient checkpointing if still running out of memory (slows training)
-        # gradient_checkpointing=True,
+        report_to="tensorboard",           # Log to TensorBoard
         seed=RANDOM_SEED,
     )
 
@@ -190,25 +206,50 @@ def train_model(model_name, train_data, val_data, output_dir_suffix):
     )
 
     # 6. Start Training
-    print("Starting training...")
+    logger.info("Starting training...")
     train_result = trainer.train()
-    print("Training finished.")
+    logger.info("Training finished.")
 
     # 7. Save Training Stats and Final Model
     metrics = train_result.metrics
     trainer.log_metrics("train", metrics)
     trainer.save_metrics("train", metrics)
 
-    print(f"Saving best model and tokenizer to {output_dir}...")
-    trainer.save_model(output_dir) # Saves the best model due to load_best_model_at_end=True
+    logger.info(f"Saving best model and tokenizer to {output_dir}...")
+    trainer.save_model(output_dir)  # Save the best model due to load_best_model_at_end=True
     tokenizer.save_pretrained(output_dir)
 
-    print(f"--- Finished training {model_name} ---")
-    return trainer # Return trainer if needed for further analysis/evaluation
+    # Save the last model
+    last_model_dir = os.path.join(output_dir, "last_model")
+    os.makedirs(last_model_dir, exist_ok=True)
+    logger.info(f"Saving last model and tokenizer to {last_model_dir}...")
+    model.save_pretrained(last_model_dir)
+    tokenizer.save_pretrained(last_model_dir)
+
+    logger.info(f"--- Finished training {model_name} ---")
+    return trainer  # Return trainer if needed for further analysis/evaluation
+
+
+# --- Inference Function ---
+def generate_response(model, tokenizer, input_text, max_length=120, temperature=0.6):
+    """Generates a response using the trained model."""
+    inputs = tokenizer(input_text, return_tensors="pt", truncation=True, padding="max_length", max_length=MAX_SOURCE_LENGTH)
+    input_ids = inputs["input_ids"].to(model.device)
+
+    # Generate response
+    outputs = model.generate(
+        input_ids=input_ids,
+        max_length=max_length,
+        temperature=temperature,  # Set temperature to 0.6
+        num_beams=4,              # Use beam search for better results
+        early_stopping=True
+    )
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
 
 # --- Run Training ---
 if __name__ == "__main__":
+    logger.info("Starting training...")
     # Train BART model
     bart_trainer = train_model(
         model_name=BART_MODEL_NAME,
@@ -216,11 +257,12 @@ if __name__ == "__main__":
         val_data=val_dataset,
         output_dir_suffix="finetuned_claim_normalization"
     )
-    
+    logger.info("Finished training BART model.")
+
     # Clear CUDA cache before training the next model (important in limited memory environments)
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-        print("CUDA cache cleared.")
+        logger.info("CUDA cache cleared.")
 
     # Train T5 model
     t5_trainer = train_model(
@@ -229,7 +271,8 @@ if __name__ == "__main__":
         val_data=val_dataset,
         output_dir_suffix="finetuned_claim_normalization"
     )
+    logger.info("Finished training T5 model.")
 
-    print("\n--- All models trained successfully! ---")
-    print(f"BART model saved in: {os.path.join(MODEL_OUTPUT_DIR, f'{BART_MODEL_NAME}_finetuned_claim_normalization')}")
-    print(f"T5 model saved in: {os.path.join(MODEL_OUTPUT_DIR, f'{T5_MODEL_NAME}_finetuned_claim_normalization')}")
+    logger.info("\n--- All models trained successfully! ---")
+    logger.info(f"BART model saved in: {os.path.join(MODEL_OUTPUT_DIR, f'{BART_MODEL_NAME}_finetuned_claim_normalization')}")
+    logger.info(f"T5 model saved in: {os.path.join(MODEL_OUTPUT_DIR, f'{T5_MODEL_NAME}_finetuned_claim_normalization')}")
