@@ -109,7 +109,7 @@ The model follows a decoder-only transformer architecture similar to GPT, implem
 ## Results
 
 ### Training and Validation Loss
-![Training and Validation Loss](/NLP-A3/src/task1/loss_plot.png)
+![Training and Validation Loss](/src/task1/loss_plot.png)
 
 The loss curves show:
 - Consistent decrease in both training and validation loss
