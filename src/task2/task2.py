@@ -14,6 +14,7 @@ from transformers import (
 )
 import nltk
 import numpy as np
+import csv  # Import CSV module for saving metrics
 
 # --- Configuration ---
 # BASE_DIR = os.getcwd()
@@ -45,14 +46,56 @@ T5_MODEL_NAME = "t5-small" # Consider 'google/flan-t5-small' as a strong alterna
 MAX_SOURCE_LENGTH = 512  # Max length of input sequence (Social Media Post)
 MAX_TARGET_LENGTH = 128  # Max length of output sequence (Normalized Claim)
 # Reduce batch size if you encounter CUDA out-of-memory errors
-PER_DEVICE_TRAIN_BATCH_SIZE = 4 # Try 2 or 1 if 4 is too high
-PER_DEVICE_EVAL_BATCH_SIZE = 8  # Can usually be higher than train batch size
+PER_DEVICE_TRAIN_BATCH_SIZE = 16 # Try 2 or 1 if 4 is too high
+PER_DEVICE_EVAL_BATCH_SIZE = 16  # Can usually be higher than train batch size
 # Increase accumulation steps to simulate larger batch size if lowering batch size
 GRADIENT_ACCUMULATION_STEPS = 4 # Effective batch size = batch_size * accumulation_steps
 LEARNING_RATE = 5e-5
-NUM_TRAIN_EPOCHS = 50 # Start with a small number, increase if needed/possible
+NUM_TRAIN_EPOCHS = 1 # Start with a small number, increase if needed/possible
 WEIGHT_DECAY = 0.01
 FP16 = torch.cuda.is_available() # Use mixed precision if CUDA is available
+
+import re
+from contractions import contractions_dict
+
+'''
+Preprocessing: We have three columns in the dataset: (['PID', 'Social Media Post', 'Normalized Claim'], dtype='object')
+- PID: Integer number representing the post ID
+- Social Media Post: The text of the post
+- Normalized Claim: The claim in the post, which is a string of text
+'''
+
+def expand_contractions(text, contractions_dict):
+    """
+    Expands contractions in the given text using the provided contractions dictionary.
+    """
+    pattern = re.compile(r'\b(' + '|'.join(re.escape(key) for key in contractions_dict.keys()) + r')\b')
+    return pattern.sub(lambda x: contractions_dict[x.group()], text)
+
+def clean_text(text):
+    """
+    Cleans the text by removing links, special characters, and extra whitespace, and converts to lowercase.
+    """
+    # Remove URLs
+    text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
+    # Remove special characters and numbers (except spaces)
+    text = re.sub(r'[^a-zA-Z\s]', '', text)
+    # Convert to lowercase
+    text = text.lower()
+    # Remove extra whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+def preprocess_data(data):
+    """
+    Preprocesses the dataset by expanding contractions and cleaning text.
+    """
+    # Apply preprocessing to the 'Social Media Post' column
+    data['Social Media Post'] = data['Social Media Post'].apply(lambda x: expand_contractions(x, contractions_dict))
+    data['Social Media Post'] = data['Social Media Post'].apply(clean_text)
+    data['Normalized Claim'] = data['Normalized Claim'].apply(lambda x: expand_contractions(x, contractions_dict))
+    data['Normalized Claim'] = data['Normalized Claim'].apply(clean_text)
+    return data
 
 # --- Ensure NLTK data is downloaded (for ROUGE metric) ---
 try:
@@ -99,25 +142,36 @@ def compute_metrics(eval_pred):
     decoded_preds = tokenizer.batch_decode(predictions, skip_special_tokens=True)
     decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
+    # Filter out empty predictions and references
+    filtered_preds, filtered_labels = [], []
+    for pred, label in zip(decoded_preds, decoded_labels):
+        if label.strip():  # Only include non-empty references
+            filtered_preds.append(pred)
+            filtered_labels.append(label)
+
+    # Ensure references are in the correct format for BLEU and ROUGE
+    decoded_labels_bleu = [[label] for label in filtered_labels]  # BLEU expects a list of lists
+    decoded_labels_rouge = filtered_labels  # ROUGE expects a flat list of strings
+
     # ROUGE
-    rouge_scores = rouge.compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=True)
-    rouge_results = {key: value.mid.fmeasure * 100 for key, value in rouge_scores.items()}
+    rouge_scores = rouge.compute(predictions=filtered_preds, references=decoded_labels_rouge, use_stemmer=True)
+    rouge_results = {
+        "rouge1": rouge_scores["rouge1"] * 100,
+        "rouge2": rouge_scores["rouge2"] * 100,
+        "rougeL": rouge_scores["rougeL"] * 100,
+        "rougeLsum": rouge_scores["rougeLsum"] * 100,
+    }
 
     # BLEU-4
-    decoded_labels_bleu = [[label] for label in decoded_labels]
-    bleu_score = bleu.compute(predictions=decoded_preds, references=decoded_labels_bleu)
+    bleu_score = bleu.compute(predictions=filtered_preds, references=decoded_labels_bleu)
     bleu_results = {"bleu4": bleu_score["bleu"] * 100}
 
     # BERTScore
-    bertscore_results = bertscore.compute(predictions=decoded_preds, references=decoded_labels, lang="en")
+    bertscore_results = bertscore.compute(predictions=filtered_preds, references=filtered_labels, lang="en")
     bertscore_f1 = {"bertscore_f1": np.mean(bertscore_results["f1"]) * 100}
 
     # Combine all metrics
     return {**rouge_results, **bleu_results, **bertscore_f1}
-
-# Redirect stdout to log file
-import sys
-sys.stdout = open(os.path.join(MODEL_OUTPUT_DIR, "training_output.log"), "w")
 
 # --- Tokenization Function ---
 # Global tokenizer variable to be set within the training loop
@@ -143,19 +197,19 @@ def preprocess_function(examples):
 def train_model(model_name, train_data, val_data, output_dir_suffix):
     global tokenizer  # Allow modification of the global tokenizer variable
 
-    logger.info(f"\n--- Training {model_name} ---")
+    print(f"\n--- Training {model_name} ---")
     output_dir = os.path.join(MODEL_OUTPUT_DIR, f"{model_name.replace('/', '_')}_{output_dir_suffix}")
     logging_dir = os.path.join(output_dir, 'logs')
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(logging_dir, exist_ok=True)
 
     # 1. Load Tokenizer and Model
-    logger.info(f"Loading tokenizer and model for {model_name}...")
+    print(f"Loading tokenizer and model for {model_name}...")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
 
     # 2. Tokenize Data
-    logger.info("Tokenizing datasets...")
+    print("Tokenizing datasets...")
     tokenized_train = train_data.map(preprocess_function, batched=True)
     tokenized_val = val_data.map(preprocess_function, batched=True)
 
@@ -171,17 +225,18 @@ def train_model(model_name, train_data, val_data, output_dir_suffix):
     )
 
     # 4. Training Arguments
-    logger.info("Setting up training arguments...")
+    print("Setting up training arguments...")
     training_args = Seq2SeqTrainingArguments(
         output_dir=output_dir,
         evaluation_strategy="epoch",       # Evaluate at the end of each epoch
-        save_strategy="epoch",             # Save a checkpoint at the end of each epoch
+        save_strategy="epoch",             # Save checkpoints at the end of each epoch
+        save_total_limit=1,                # Keep only the best checkpoint
         learning_rate=LEARNING_RATE,
         per_device_train_batch_size=PER_DEVICE_TRAIN_BATCH_SIZE,
         per_device_eval_batch_size=PER_DEVICE_EVAL_BATCH_SIZE,
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
         weight_decay=WEIGHT_DECAY,
-        num_train_epochs=NUM_TRAIN_EPOCHS,  # Train for 50 epochs
+        num_train_epochs=NUM_TRAIN_EPOCHS,  # Train for specified epochs
         predict_with_generate=True,        # Important for Seq2Seq evaluation
         generation_max_length=120,         # Set max length of generated response to 120
         fp16=FP16,                         # Use mixed precision if available
@@ -190,7 +245,7 @@ def train_model(model_name, train_data, val_data, output_dir_suffix):
         load_best_model_at_end=True,       # Load the best model based on metric at the end
         metric_for_best_model="rougeL",    # Use ROUGE-L score to find the best model
         greater_is_better=True,            # Higher ROUGE is better
-        report_to="tensorboard",           # Log to TensorBoard
+        report_to="none",                  # Do not report to TensorBoard
         seed=RANDOM_SEED,
     )
 
@@ -205,28 +260,47 @@ def train_model(model_name, train_data, val_data, output_dir_suffix):
         compute_metrics=compute_metrics,
     )
 
-    # 6. Start Training
-    logger.info("Starting training...")
-    train_result = trainer.train()
-    logger.info("Training finished.")
+    # 6. CSV File for Metrics
+    metrics_file = os.path.join(output_dir, "training_metrics.csv")
+    with open(metrics_file, mode="w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["epoch", "rouge1", "rouge2", "rougeL", "bleu4", "bertscore_f1"])  # Header row
 
-    # 7. Save Training Stats and Final Model
-    metrics = train_result.metrics
-    trainer.log_metrics("train", metrics)
-    trainer.save_metrics("train", metrics)
+    # 7. Start Training
+    print("Starting training...")
+    for epoch in range(1, int(NUM_TRAIN_EPOCHS) + 1):
+        train_result = trainer.train(resume_from_checkpoint=None if epoch == 1 else output_dir)
+        metrics = train_result.metrics
 
-    logger.info(f"Saving best model and tokenizer to {output_dir}...")
+        # Log metrics to shell
+        print(f"Epoch {epoch} Metrics: {metrics}")
+
+        # Save metrics to CSV
+        with open(metrics_file, mode="a", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow([
+                epoch,
+                metrics.get("eval_rouge1", 0),
+                metrics.get("eval_rouge2", 0),
+                metrics.get("eval_rougeL", 0),
+                metrics.get("eval_bleu4", 0),
+                metrics.get("eval_bertscore_f1", 0),
+            ])
+
+    print("Training finished.")
+
+    # 8. Save Best and Last Models
+    print(f"Saving best model and tokenizer to {output_dir}...")
     trainer.save_model(output_dir)  # Save the best model due to load_best_model_at_end=True
     tokenizer.save_pretrained(output_dir)
 
-    # Save the last model
     last_model_dir = os.path.join(output_dir, "last_model")
     os.makedirs(last_model_dir, exist_ok=True)
-    logger.info(f"Saving last model and tokenizer to {last_model_dir}...")
+    print(f"Saving last model and tokenizer to {last_model_dir}...")
     model.save_pretrained(last_model_dir)
     tokenizer.save_pretrained(last_model_dir)
 
-    logger.info(f"--- Finished training {model_name} ---")
+    print(f"--- Finished training {model_name} ---")
     return trainer  # Return trainer if needed for further analysis/evaluation
 
 
@@ -249,7 +323,7 @@ def generate_response(model, tokenizer, input_text, max_length=120, temperature=
 
 # --- Run Training ---
 if __name__ == "__main__":
-    logger.info("Starting training...")
+    print("Starting training...")
     # Train BART model
     bart_trainer = train_model(
         model_name=BART_MODEL_NAME,
@@ -257,12 +331,12 @@ if __name__ == "__main__":
         val_data=val_dataset,
         output_dir_suffix="finetuned_claim_normalization"
     )
-    logger.info("Finished training BART model.")
+    print("Finished training BART model.")
 
     # Clear CUDA cache before training the next model (important in limited memory environments)
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-        logger.info("CUDA cache cleared.")
+        print("CUDA cache cleared.")
 
     # Train T5 model
     t5_trainer = train_model(
@@ -271,8 +345,8 @@ if __name__ == "__main__":
         val_data=val_dataset,
         output_dir_suffix="finetuned_claim_normalization"
     )
-    logger.info("Finished training T5 model.")
+    print("Finished training T5 model.")
 
-    logger.info("\n--- All models trained successfully! ---")
-    logger.info(f"BART model saved in: {os.path.join(MODEL_OUTPUT_DIR, f'{BART_MODEL_NAME}_finetuned_claim_normalization')}")
-    logger.info(f"T5 model saved in: {os.path.join(MODEL_OUTPUT_DIR, f'{T5_MODEL_NAME}_finetuned_claim_normalization')}")
+    print("\n--- All models trained successfully! ---")
+    print(f"BART model saved in: {os.path.join(MODEL_OUTPUT_DIR, f'{BART_MODEL_NAME}_finetuned_claim_normalization')}")
+    print(f"T5 model saved in: {os.path.join(MODEL_OUTPUT_DIR, f'{T5_MODEL_NAME}_finetuned_claim_normalization')}")
