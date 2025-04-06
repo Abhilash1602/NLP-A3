@@ -128,14 +128,14 @@ def split_heads_qkv(Q, K, V, num_heads, depth):
 def load_and_preprocess_data():
     # Try to use absolute paths for files first
     try:
-        with open("./content/shakespear_train.txt", "r") as f:
+        with open("NLP-A3/dataset/task1/shakespear_train.txt", "r") as f:
             lines_train = f.readlines()
         print("Loaded train data locally")
     except FileNotFoundError:
         raise FileNotFoundError("Could not find the train data file")
     
     try:
-        with open("./content/shakespear_dev.txt", "r") as f:
+        with open("NLP-A3/dataset/task1/shakespear_dev.txt", "r") as f:
             lines_dev = f.readlines()
         print("Loaded dev data locally")
     except FileNotFoundError:
@@ -143,7 +143,7 @@ def load_and_preprocess_data():
     
     # For test data, try to load it or generate from train data
     try:
-        with open("./content/shakespear_test.txt", "r") as f:
+        with open("NLP-A3/dataset/task1/shakespear_test.txt", "r") as f:
             lines_test = f.readlines()
         print("Loaded test data locally")
     except FileNotFoundError:
@@ -155,7 +155,7 @@ def load_and_preprocess_data():
         lines_test = [lines_train[i] for i in test_indices]
         
         # Save the generated test data
-        with open("./content/shakespear_test.txt", "w") as f:
+        with open("NLP-A3/dataset/task1/shakespear_test.txt", "w") as f:
             f.writelines(lines_test)
         print(f"Generated and saved {len(lines_test)} test examples")
 
@@ -276,13 +276,14 @@ def evaluate_losses(data, model, tokenizer, bs=32, progress=True, pad_to_len=MAX
 def generate_text(model, tokenizer, tokenizer_inv, context="<START>", gen_tokens=10, temperature=0.6):
     """
     Generate a fixed number of tokens using the trained model.
+    Character-level handling of context.
     """
-    # Convert string context to token IDs if it's a special token
+    # For special tokens like <START>
     if context == "<START>":
         token_ids = [tokenizer["<START>"]]
     else:
-        # Otherwise tokenize as usual
-        token_ids = tokenize(context, tokenizer=tokenizer, include_stop=False)
+        # For regular text, tokenize each character individually
+        token_ids = [tokenizer["<START>"]] + [tokenizer.get(c, tokenizer["<UNK>"]) for c in context]
         
     tokens = torch.tensor([token_ids], dtype=torch.long).to(DEVICE)
 
@@ -448,7 +449,7 @@ class MultiHeadAttention(nn.Module):
 ## Training function
 def train_model(model, train_loader, val_dataset, tokenizer, tokenizer_inv, 
                 optimizer, criterion, scheduler=None, epochs=20, val_data=None, 
-                save_path="transformer_model.pt", patience=3, max_grad_norm=1.0):
+                save_path="NLP-A3/src/task1/transformer_model.pt", patience=3, max_grad_norm=1.0):
     train_losses = []
     val_losses = []
     
@@ -557,15 +558,6 @@ def main():
     ## Load and preprocess data
     train_dataset, val_dataset, tokenizer, tokenizer_inv = load_and_preprocess_data()
     
-    ## Create data loaders
-    batch_size = 32
-    train_loader = DataLoader(
-        train_dataset, 
-        batch_size=batch_size, 
-        shuffle=True,
-        drop_last=True
-    )
-    
     ## Model hyperparameters
     vocab_size = len(tokenizer)
     d_model = 256
@@ -574,75 +566,125 @@ def main():
     d_ff = 1024
     dropout = 0.1
     
-    ## Initialize model
-    model = TransformerLM(
-        vocab_size=vocab_size,
-        d_model=d_model,
-        nhead=nhead,
-        num_layers=num_layers,
-        d_ff=d_ff,
-        dropout=dropout
-    ).to(DEVICE)
+    save_path = "NLP-A3/src/task1/transformer_shakespeare.pt"
     
-    ## Print model summary
-    print(f"Model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
-    
-    ## Initialize optimizer and loss function
-    optimizer = torch.optim.AdamW(model.parameters(), lr=5e-4, weight_decay=0.01)
-    criterion = nn.CrossEntropyLoss(ignore_index=tokenizer["<PAD>"])
-    
-    ## Add learning rate scheduler
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=1, verbose=True
-    )
-    
-    ## Train the model
-    save_path = "transformer_shakespeare.pt"
-    max_grad_norm = 1.0  # Setting the gradient clipping threshold
-    
-    val_data = [" ".join(line.split()) for line in val_dataset.data]
-    train_losses, val_losses = train_model(
-        model, 
-        train_loader,
-        val_dataset,
-        tokenizer,
-        tokenizer_inv,
-        optimizer,
-        criterion,
-        scheduler=scheduler,
-        val_data=val_data,
-        save_path=save_path,
-        max_grad_norm=max_grad_norm  # Pass the gradient clipping parameter
-    )
-    
-    ## Plot training and validation losses
-    plt.figure(figsize=(10, 6))
-    plt.plot(train_losses, label='Training Loss')
-    plt.plot(val_losses, label='Validation Loss')
-    plt.title('Training and Validation Loss')
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
-    plt.legend()
-    plt.savefig('loss_plot.png')
-    plt.show()
+    # Check if model file already exists
+    if os.path.exists(save_path):
+        print(f"Found existing model at {save_path}. Loading model...")
+        checkpoint = torch.load(save_path)
+        
+        # Initialize model with saved hyperparameters
+        if 'hyperparams' in checkpoint:
+            hyperparams = checkpoint['hyperparams']
+            model = TransformerLM(
+                vocab_size=hyperparams['vocab_size'],
+                d_model=hyperparams['d_model'],
+                nhead=hyperparams['nhead'],
+                num_layers=hyperparams['num_layers'],
+                d_ff=hyperparams['d_ff'],
+                dropout=hyperparams['dropout']
+            ).to(DEVICE)
+        else:
+            # If no hyperparams saved, use the default ones
+            model = TransformerLM(
+                vocab_size=vocab_size,
+                d_model=d_model,
+                nhead=nhead,
+                num_layers=num_layers,
+                d_ff=d_ff,
+                dropout=dropout
+            ).to(DEVICE)
+            
+        # Load the state dict
+        model.load_state_dict(checkpoint['model_state_dict'])
+        print("Model loaded successfully!")
+        
+        # If tokenizer is not in current namespace, load from checkpoint
+        if 'tokenizer' in checkpoint and tokenizer is None:
+            tokenizer = checkpoint['tokenizer']
+        if 'tokenizer_inv' in checkpoint and tokenizer_inv is None:
+            tokenizer_inv = checkpoint['tokenizer_inv']
+            
+    else:
+        print(f"No existing model found at {save_path}. Training new model...")
+        
+        ## Create data loaders
+        batch_size = 32
+        train_loader = DataLoader(
+            train_dataset, 
+            batch_size=batch_size, 
+            shuffle=True,
+            drop_last=True
+        )
+        
+        ## Initialize model
+        model = TransformerLM(
+            vocab_size=vocab_size,
+            d_model=d_model,
+            nhead=nhead,
+            num_layers=num_layers,
+            d_ff=d_ff,
+            dropout=dropout
+        ).to(DEVICE)
+        
+        ## Print model summary
+        print(f"Model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
+        
+        ## Initialize optimizer and loss function
+        optimizer = torch.optim.AdamW(model.parameters(), lr=5e-4, weight_decay=0.01)
+        criterion = nn.CrossEntropyLoss(ignore_index=tokenizer["<PAD>"])
+        
+        ## Add learning rate scheduler
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min', factor=0.5, patience=1, verbose=True
+        )
+        
+        ## Train the model
+        max_grad_norm = 1.0  # Setting the gradient clipping threshold
+        
+        val_data = [" ".join(line.split()) for line in val_dataset.data]
+        train_losses, val_losses = train_model(
+            model, 
+            train_loader,
+            val_dataset,
+            tokenizer,
+            tokenizer_inv,
+            optimizer,
+            criterion,
+            scheduler=scheduler,
+            val_data=val_data,
+            save_path=save_path,
+            max_grad_norm=max_grad_norm  # Pass the gradient clipping parameter
+        )
+        
+        ## Plot training and validation losses
+        plt.figure(figsize=(10, 6))
+        plt.plot(train_losses, label='Training Loss')
+        plt.plot(val_losses, label='Validation Loss')
+        plt.title('Training and Validation Loss')
+        plt.xlabel('Epochs')
+        plt.ylabel('Loss')
+        plt.legend()
+        plt.savefig('NLP-A3/src/task1/loss_plot.png')
+        plt.show()
 
-    ## Save the model
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'tokenizer': tokenizer,
-        'tokenizer_inv': tokenizer_inv,
-        'hyperparams': {
-            'vocab_size': vocab_size,
-            'd_model': d_model,
-            'nhead': nhead,
-            'num_layers': num_layers,
-            'd_ff': d_ff,
-            'dropout': dropout
-        }
-    }, save_path)
+        ## Save the model
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'tokenizer': tokenizer,
+            'tokenizer_inv': tokenizer_inv,
+            'hyperparams': {
+                'vocab_size': vocab_size,
+                'd_model': d_model,
+                'nhead': nhead,
+                'num_layers': num_layers,
+                'd_ff': d_ff,
+                'dropout': dropout
+            }
+        }, save_path)
 
     ## Evaluate on test data
-    with open("./content/shakespear_test.txt", "r") as f:
+    with open("NLP-A3/dataset/task1/shakespear_test.txt", "r") as f:
         lines_test = f.readlines()
     
     test_data = [" ".join(line.split()) for line in lines_test]
@@ -650,10 +692,6 @@ def main():
     test_ppl = math.exp(np.mean(test_losses))
     
     print(f"\nTest perplexity: {test_ppl:.4f}")
-
-
-if __name__ == "__main__":
-    main()
 
 
 def inference(model_path, test_file, tokenizer, tokenizer_inv, gen_tokens=10, temperature=0.6):
@@ -687,22 +725,21 @@ def inference(model_path, test_file, tokenizer, tokenizer_inv, gen_tokens=10, te
     
     # Generate text for each line in test file
     for line in test_data:
-        # Use the first few words as context
-        context = line.split()[:3]
-        context_str = " ".join(context)
+        # For character-level models, we can use a few characters as context
+        context = line[:10]  # Take first 10 characters instead of first 3 words
         
         # Generate continuation
         generated = generate_text(
             model,
             tokenizer,
             tokenizer_inv,
-            context=context_str,
+            context=context,
             gen_tokens=gen_tokens,
             temperature=temperature
         )
         
         generated_texts.append({
-            'context': context_str,
+            'context': context,
             'generated': generated
         })
     
@@ -713,20 +750,25 @@ def inference(model_path, test_file, tokenizer, tokenizer_inv, gen_tokens=10, te
     return generated_texts, test_ppl
 
 
-# load the checkpoint first to get tokenizer and tokenizer_inv
-checkpoint = torch.load("transformer_shakespeare.pt")
-tokenizer = checkpoint['tokenizer']
-tokenizer_inv = checkpoint['tokenizer_inv']
+if __name__ == "__main__":
+    main()
+    
+    # Model is now already loaded in main() if it exists
+    # Just run inference with the existing model
+    model_path = "NLP-A3/src/task1/transformer_shakespeare.pt"
+    test_file = "NLP-A3/dataset/task1/shakespear_test.txt" 
+    
+    # Load the checkpoint to get tokenizer and tokenizer_inv if not already available
+    checkpoint = torch.load(model_path)
+    tokenizer = checkpoint['tokenizer']
+    tokenizer_inv = checkpoint['tokenizer_inv']
+    
+    generated_texts, ppl = inference(model_path, test_file, tokenizer, tokenizer_inv, gen_tokens=50, temperature=0.8)
 
-# use these variables in the function call
-model_path = "transformer_shakespeare.pt"
-test_file = "./content/shakespear_test.txt" 
-generated_texts, ppl = inference(model_path, test_file, tokenizer, tokenizer_inv, gen_tokens=50, temperature=0.8)
-
-## Print the generated text and perplexity
-print(f"Test Perplexity: {ppl:.4f}\n")
-print("Generated Text Samples:")
-for i, sample in enumerate(generated_texts[:5]):  # Show first 5 samples
-    print(f"\nSample {i+1}:")
-    print(f"Context: '{sample['context']}'")
-    print(f"Generated: '{sample['generated']}'")
+    ## Print the generated text and perplexity
+    print(f"Test Perplexity: {ppl:.4f}\n")
+    print("Generated Text Samples:")
+    for i, sample in enumerate(generated_texts[:5]):  # Show first 5 samples
+        print(f"\nSample {i+1}:")
+        print(f"Context: '{sample['context']}'")
+        print(f"Generated: '{sample['generated']}'")
